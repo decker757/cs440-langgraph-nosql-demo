@@ -1,0 +1,15 @@
+name: cs440-nosql-demo
+services:
+  mongo:
+    image: mongo:8.0.13
+    ports:
+      - "127.0.0.1:27028:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - demo-data:/data/db
+volumes:
+  demo-data:

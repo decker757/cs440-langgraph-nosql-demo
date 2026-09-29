@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>NoSQL injection · Saved conversation demo</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="demo-shell">
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">CS440 · SAVED CONVERSATION DEMO</p>
+          <h1>Whose conversation gets restored?</h1>
+        </div>
+        <div class="identity">
+          <span class="avatar" aria-hidden="true">A</span>
+          <div><span class="identity-label">Simulated requester · not authenticated</span><strong>Alice</strong></div>
+          <span id="server-status" class="server-status">Connecting…</span>
+        </div>
+      </header>
+
+      <form id="run-form" class="run-controls">
+        <label for="adapter-version">MongoDBSaver version
+          <select id="adapter-version" name="adapterVersion">
+            <option value="1.3.0">1.3.0 · vulnerable</option>
+            <option value="1.3.1">1.3.1 · patched</option>
+          </select>
+        </label>
+        <label for="request-kind">Request identifiers
+          <select id="request-kind" name="requestKind">
+            <option value="normal">Normal text IDs</option>
+            <option value="operator">Operator objects</option>
+          </select>
+        </label>
+        <button id="run-button" class="primary-button" type="submit" disabled>Continue my chat <span aria-hidden="true">→</span></button>
+      </form>
+
+      <nav class="trial-controls" aria-label="Run a comparison trial">
+        <button class="trial-button" type="button" data-version="1.3.0" data-kind="normal" disabled><span class="trial-number">1</span><span><strong>Baseline</strong><small>1.3.0 · text IDs</small></span></button>
+        <button class="trial-button" type="button" data-version="1.3.0" data-kind="operator" disabled><span class="trial-number">2</span><span><strong>Changed input</strong><small>1.3.0 · objects</small></span></button>
+        <button class="trial-button" type="button" data-version="1.3.1" data-kind="operator" disabled><span class="trial-number">3</span><span><strong>After update</strong><small>1.3.1 · objects</small></span></button>
+        <button class="trial-button" type="button" data-version="1.3.1" data-kind="normal" disabled><span class="trial-number">4</span><span><strong>Normal control</strong><small>1.3.1 · text IDs</small></span></button>
+        <button id="reset-button" class="text-button" type="button" disabled>Reset fixture</button>
+      </nav>
+
+      <div class="path-bar">
+        <div class="architecture" aria-label="Request path: App, LangGraph, MongoDBSaver, MongoDB"><span>App</span><b aria-hidden="true">→</b><span>LangGraph</span><b aria-hidden="true">→</b><span>MongoDBSaver</span><b aria-hidden="true">→</b><span>MongoDB</span></div>
+        <p id="run-context">Choose a trial to begin.</p>
+      </div>
+
+      <main class="evidence-grid" aria-label="Actual request and result">
+        <section class="evidence-panel request-panel">
+          <header class="panel-header"><span class="panel-number">1</span><h2>Request identifiers</h2></header>
+          <div class="panel-body">
+            <div class="message-line"><span>Chat message</span><strong id="chat-message">“Continue my chat”</strong></div>
+            <p class="code-label">configurable</p>
+            <pre id="request-json" class="json-code placeholder" aria-label="Submitted identifier fields">Run a trial to see the submitted fields.</pre>
+          </div>
+          <div class="panel-note">The message stays the same. The identifier values change.</div>
+        </section>
+
+        <section class="evidence-panel query-panel">
+          <header class="panel-header"><span class="panel-number">2</span><h2>Actual database lookup</h2></header>
+          <div class="panel-body">
+            <p class="code-label">Captured MongoDB command</p>
+            <pre id="query-json" class="json-code placeholder" aria-label="First captured database lookup">Run a trial to inspect the lookup.</pre>
+          </div>
+          <div class="query-statistics"><span><strong id="lookup-count">—</strong> lookup queries</span><span>Graph node ran <strong id="node-ran">—</strong></span></div>
+        </section>
+
+        <section id="result-panel" class="evidence-panel result-panel">
+          <header class="panel-header"><span class="panel-number">3</span><h2>Restored conversation</h2></header>
+          <div id="result-content" class="panel-body result-content"><div class="empty-result"><span class="empty-symbol" aria-hidden="true">↩</span><p>The real returned state<br>will appear here.</p></div></div>
+          <div id="result-check" class="panel-note">No trial has run yet.</div>
+        </section>
+      </main>
+
+      <footer class="page-footer">
+        <div>
+          <p>Local fictional data <span aria-hidden="true">•</span> Real LangGraph + MongoDB <span aria-hidden="true">•</span> Deterministic node; no LLM call</p>
+          <p class="footnote">Alice is a simulated requester, not a logged-in session. The 1.3.1 fix rejects non-string identifier fields; that stops this operator injection but does not replace an app-level check that the requester actually owns the thread.</p>
+          <p id="status-message" class="status-message" role="status" aria-live="polite">Connecting to the local server…</p>
+        </div>
+        <a id="evidence-link" class="evidence-link" href="/api/evidence" download="nosql-demo-evidence.json" aria-disabled="true">Download evidence <span aria-hidden="true">↓</span></a>
+      </footer>
+    </div>
+  </body>
+</html>
