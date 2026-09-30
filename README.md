@@ -316,11 +316,19 @@ After running trials, print the checkpoint queries MongoDB actually received:
 ./setup.sh logs -f     # follow live (run in a side terminal during a demo)
 ```
 
-Example output (trimmed) after Trial 2 (vulnerable) then Trial 3 (patched):
+Example output (trimmed) after Trial 2 (vulnerable) then Trial 3 (patched). In a
+terminal the injected line is highlighted red and the `returned 0` seeding rows
+are dimmed:
 
-```json
-{"ns":"demo_vulnerable.checkpoints","filter":{"thread_id":"alice-thread-001","checkpoint_ns":""},"plan":"EOF","docsExamined":0,"nreturned":0}
-{"ns":"demo_vulnerable.checkpoints","filter":{"thread_id":{"$gt":""},"checkpoint_ns":""},"plan":"COLLSCAN","docsExamined":6,"nreturned":1}
+```text
+  demo_vulnerable
+    01:22:00   thread_id="alice-thread-001"                EOF       scanned 0  -> returned 0
+    01:22:00   thread_id="bob-thread-001"                  COLLSCAN  scanned 3  -> returned 0
+    01:22:40   thread_id={"$gt":""}   <- INJECTED OPERATOR  COLLSCAN  scanned 6  -> returned 1   ** LEAK **
+
+  demo_patched
+    01:22:00   thread_id="alice-thread-001"                EOF       scanned 0  -> returned 0
+    01:22:00   thread_id="bob-thread-001"                  COLLSCAN  scanned 3  -> returned 0
 ```
 
 What this proves, independently of the app:
