@@ -2,6 +2,10 @@ name: cs440-nosql-demo
 services:
   mongo:
     image: mongo:8.0.13
+    # --slowms 0 makes mongod log EVERY operation (not just slow ones) to its
+    # diagnostic log. This gives independent, database-side evidence of the
+    # exact filter each query carried — see `./setup.sh logs`.
+    command: ["mongod", "--slowms", "0"]
     ports:
       - "127.0.0.1:27028:27017"
     healthcheck:

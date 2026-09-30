@@ -10,6 +10,7 @@
 #   ./setup.sh [start]   Check prereqs, start MongoDB, seed fixture, serve UI (default)
 #   ./setup.sh stop      Stop and remove this demo's MongoDB container + volume
 #   ./setup.sh test      Start MongoDB (if needed) and run the four trials as tests
+#   ./setup.sh logs      Show MongoDB's own log of checkpoint queries (add -f to follow)
 #   ./setup.sh help      Show this help
 #
 # After `start`, Ctrl+C stops the web server; the MongoDB container keeps
@@ -88,8 +89,45 @@ cmd_test() {
   exec npm test
 }
 
+# Independent, database-side evidence: MongoDB's OWN log of every checkpoint
+# query, showing the exact filter each one carried. `--slowms 0` in compose.yaml
+# makes mongod log all operations. Pass -f/--follow to tail live during a demo.
+cmd_logs() {
+  check_docker
+
+  local grep_find='"find":"checkpoints"'
+  if [ "${2:-}" = "-f" ] || [ "${2:-}" = "--follow" ]; then
+    printf 'Following checkpoint queries live (Ctrl+C to stop)...\n\n'
+    docker compose logs --no-color --no-log-prefix --follow mongo 2>/dev/null \
+      | grep --line-buffered -F "$grep_find"
+    return
+  fi
+
+  local raw
+  raw="$(docker compose logs --no-color --no-log-prefix mongo 2>/dev/null | grep -F "$grep_find" || true)"
+  if [ -z "$raw" ]; then
+    printf 'No checkpoint queries logged yet. Start the demo and run a trial first.\n'
+    return
+  fi
+
+  printf 'MongoDB-side record of every checkpoint query (the database, not the app):\n\n'
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s\n' "$raw" | jq -rc '{
+      t: .t["$date"], ns: .attr.ns, filter: .attr.command.filter,
+      sort: .attr.command.sort, limit: .attr.command.limit,
+      plan: .attr.planSummary, docsExamined: .attr.docsExamined,
+      nreturned: .attr.nreturned
+    }'
+    printf '\nA filter value like {"$gt":""} is the injected operator. On the patched\n'
+    printf 'database no such filter appears — getTuple rejected it before any find ran.\n'
+  else
+    printf '%s\n' "$raw"
+    printf '\n(Install jq for a cleaner summary.)\n'
+  fi
+}
+
 usage() {
-  sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # --- Dispatch -------------------------------------------------------------
@@ -98,6 +136,7 @@ case "${1:-start}" in
   start)      cmd_start ;;
   stop)       cmd_stop ;;
   test)       cmd_test ;;
+  logs)       cmd_logs "$@" ;;
   help|-h|--help) usage ;;
   *)          fail "Unknown command: $1 (try: ./setup.sh help)" ;;
 esac

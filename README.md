@@ -100,6 +100,19 @@ This runs the same four trials as integration tests against real LangGraph and
 real MongoDB and asserts each expected outcome, including that the fixture is
 unchanged afterward.
 
+### One-command control script (`setup.sh`)
+
+A convenience wrapper bundles the steps above. It checks prerequisites first and
+works on macOS, Linux, and Windows via **Git Bash or WSL** (native Windows
+cmd/PowerShell is not supported — it needs bash):
+
+```bash
+./setup.sh          # start: check prereqs, start MongoDB, seed the fixture, serve the UI
+./setup.sh stop     # stop and remove ONLY this demo's MongoDB container + volume
+./setup.sh test     # run the four trials as integration tests
+./setup.sh logs     # show MongoDB's own log of checkpoint queries (see below)
+```
+
 ---
 
 ## Step-by-step: the four trials in the browser
@@ -285,6 +298,45 @@ fixture identical between runs so results are repeatable. Nothing about the
 vulnerable read path is changed. Seeding uses the fully unwrapped saver, so the
 stored checkpoints are written by the genuine saver. See `src/saver.js`
 (`readOnly`) and `src/demo.js`.
+
+---
+
+## Database-side evidence (MongoDB's own log)
+
+The browser's query panel shows the command the *app* captured via the driver's
+monitoring event. For evidence that does **not** rely on the app's own word, this
+demo also has MongoDB log **every** operation, so you can read the exact filter
+each query carried from the **database's** side. `compose.yaml` starts mongod
+with `--slowms 0` for this.
+
+After running trials, print the checkpoint queries MongoDB actually received:
+
+```bash
+./setup.sh logs        # all captured checkpoint queries
+./setup.sh logs -f     # follow live (run in a side terminal during a demo)
+```
+
+Example output (trimmed) after Trial 2 (vulnerable) then Trial 3 (patched):
+
+```json
+{"ns":"demo_vulnerable.checkpoints","filter":{"thread_id":"alice-thread-001","checkpoint_ns":""},"plan":"EOF","docsExamined":0,"nreturned":0}
+{"ns":"demo_vulnerable.checkpoints","filter":{"thread_id":{"$gt":""},"checkpoint_ns":""},"plan":"COLLSCAN","docsExamined":6,"nreturned":1}
+```
+
+What this proves, independently of the app:
+
+- The injected operator `{"$gt":""}` reached MongoDB **verbatim** — it is right
+  there in the database's own log, not just in a panel the app rendered.
+- `plan: COLLSCAN` with `docsExamined: 6` shows the query scanned **every**
+  stored checkpoint (Alice's and Bob's), not a scoped lookup, and `nreturned: 1`
+  is the single leaked record (Bob's, the newest match).
+- On the patched database, **no** checkpoint query carries a `$gt` filter:
+  `getTuple` rejected it before any `find` ran, so the malicious filter never
+  reached MongoDB at all.
+
+**Demo tip:** run `./setup.sh logs -f` in a second terminal, then click the
+trials in the browser. The injected filter appears in the live database log the
+instant you run Trial 2, and nothing appears for Trial 3.
 
 ---
 
