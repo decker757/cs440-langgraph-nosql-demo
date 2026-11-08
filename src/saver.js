@@ -36,15 +36,15 @@ export function getClient() {
       if (!activeCapture) return;
       if (event.commandName !== 'find') return;
       if (!CHECKPOINT_COLLECTIONS.has(event.command.find)) return;
-      // We record the fields command monitoring reports reliably: the target
-      // collection, the filter (where the injected operator shows up), and the
-      // limit. The saver's source additionally applies `.sort("checkpoint_id",
-      // -1)`, which is why a broadened match returns the newest checkpoint; the
-      // driver does not surface that sort in the command document for the
-      // string-form sort call, so we do not display a misleading empty sort.
+      // We record the fields that explain the result: the target collection, the
+      // filter (where the injected operator shows up), and the sort and limit
+      // (why a broadened match returns the single newest checkpoint). The driver
+      // hands us the sort as a Map, which JSON would serialize to an empty {}.
+      const { sort } = event.command;
       activeCapture.push({
         collection: event.command.find,
         filter: event.command.filter ?? {},
+        sort: sort instanceof Map ? Object.fromEntries(sort) : sort ?? null,
         limit: event.command.limit ?? null,
       });
     });

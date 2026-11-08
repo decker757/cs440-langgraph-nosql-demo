@@ -10,6 +10,7 @@ import { dirname, join, normalize } from 'node:path';
 
 import { runTrial, seedFixture, status, readEvidence } from './demo.js';
 import { closeClient } from './saver.js';
+import { REQUEST_KINDS } from './fixture.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(HERE, '..', 'public');
@@ -66,7 +67,7 @@ async function handleApi(req, res, pathname) {
   if (pathname === '/api/run' && req.method === 'POST') {
     const body = await readBody(req);
     const version = body.version === '1.3.1' ? '1.3.1' : '1.3.0';
-    const requestKind = body.requestKind === 'operator' ? 'operator' : 'normal';
+    const requestKind = REQUEST_KINDS.includes(body.requestKind) ? body.requestKind : 'normal';
     return sendJSON(res, 200, await runTrial({ version, requestKind }));
   }
   if (pathname === '/api/reset' && req.method === 'POST') {

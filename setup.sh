@@ -9,7 +9,7 @@
 # Usage:
 #   ./setup.sh [start]   Check prereqs, start MongoDB, seed fixture, serve UI (default)
 #   ./setup.sh stop      Stop and remove this demo's MongoDB container + volume
-#   ./setup.sh test      Start MongoDB (if needed) and run the four trials as tests
+#   ./setup.sh test      Start MongoDB (if needed) and run the five trials as tests
 #   ./setup.sh logs      Show MongoDB's own log of checkpoint queries (add -f to follow)
 #   ./setup.sh help      Show this help
 #
@@ -85,7 +85,7 @@ cmd_test() {
   check_docker
   ensure_deps
   start_db
-  printf '\nRunning the four trials as integration tests...\n\n'
+  printf '\nRunning the five trials as integration tests...\n\n'
   exec npm test
 }
 
@@ -94,79 +94,17 @@ cmd_test() {
 # makes mongod log all operations. Pass -f/--follow to tail live during a demo.
 cmd_logs() {
   check_docker
-
-  local grep_find='"find":"checkpoints"'
-
-  # jq: one readable line per query. Flags a filter whose thread_id is an object
-  # (i.e. a smuggled operator) instead of a plain string.
-  local line_jq='
-    (.attr.ns | sub("\\.checkpoints$";"")) as $db
-    | (.t["$date"] | split("T")[1] | split(".")[0]) as $t
-    | (.attr.command.filter.thread_id) as $tid
-    | (if ($tid|type)=="object" then "  <- INJECTED OPERATOR" else "" end) as $flag
-    | "\($t)  \($db)  thread_id=\($tid|tojson)  \(.attr.planSummary // "-")  scanned \(.attr.docsExamined // 0) -> returned \(.attr.nreturned // 0)\($flag)"'
+  check_node
 
   if [ "${2:-}" = "-f" ] || [ "${2:-}" = "--follow" ]; then
-    printf 'Following checkpoint queries live (Ctrl+C to stop)...\n\n'
-    if command -v jq >/dev/null 2>&1; then
-      docker compose logs --no-color --no-log-prefix --follow mongo 2>/dev/null \
-        | grep --line-buffered -F "$grep_find" | jq --unbuffered -r "$line_jq"
-    else
-      docker compose logs --no-color --no-log-prefix --follow mongo 2>/dev/null \
-        | grep --line-buffered -F "$grep_find"
-    fi
+    printf 'Following trial queries live (Ctrl+C to stop)...
+
+'
+    docker compose logs --no-color --no-log-prefix --follow mongo 2>/dev/null | node src/mongo-log.js --follow
     return
   fi
 
-  local raw
-  raw="$(docker compose logs --no-color --no-log-prefix mongo 2>/dev/null | grep -F "$grep_find" || true)"
-  if [ -z "$raw" ]; then
-    printf 'No checkpoint queries logged yet. Start the demo and run a trial first.\n'
-    return
-  fi
-
-  if ! command -v jq >/dev/null 2>&1; then
-    printf 'MongoDB-side record of every checkpoint query (install jq for a nicer view):\n\n'
-    printf '%s\n' "$raw"
-    return
-  fi
-
-  local use_color=0
-  [ -t 1 ] && use_color=1
-
-  printf "\nMongoDB's own log of every checkpoint query\n"
-  printf '(read straight from the database — independent of the app)\n\n'
-
-  # Emit tab-separated fields, group by database, then pretty-print aligned rows.
-  printf '%s\n' "$raw" \
-    | jq -r '[
-        (.attr.ns | sub("\\.checkpoints$";"")),
-        (.t["$date"] | split("T")[1] | split(".")[0]),
-        (if (.attr.command.filter.thread_id | type) == "object" then "1" else "0" end),
-        (.attr.command.filter.thread_id | tojson),
-        (.attr.planSummary // "-"),
-        (.attr.docsExamined // 0 | tostring),
-        (.attr.nreturned // 0 | tostring)
-      ] | @tsv' \
-    | sort -t "$(printf '\t')" -k1,1 -k2,2 \
-    | awk -F'\t' -v color="$use_color" '
-        BEGIN {
-          if (color) { R="\033[1;31m"; DIM="\033[2m"; B="\033[1m"; X="\033[0m" }
-        }
-        {
-          db=$1; t=$2; inj=$3; tid=$4; plan=$5; exa=$6; ret=$7
-          if (db != prevdb) { if (NR>1) print ""; printf "  %s%s%s\n", B, db, X; prevdb=db }
-          lab = "thread_id=" tid
-          if (inj=="1") lab = lab "   <- INJECTED OPERATOR"
-          row = sprintf("    %s   %-46s %-9s scanned %-2s -> returned %s", t, lab, plan, exa, ret)
-          if (inj=="1")      print R row "   ** LEAK **" X
-          else if (ret=="0") print DIM row X
-          else               print row
-        }
-        END { print "" }'
-
-  printf 'A filter value like {"$gt":""} is the injected operator: it appears only on\n'
-  printf 'the vulnerable database. The patched saver rejected it before any query ran.\n'
+  docker compose logs --no-color --no-log-prefix mongo 2>/dev/null | node src/mongo-log.js
 }
 
 usage() {

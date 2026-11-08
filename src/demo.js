@@ -72,6 +72,25 @@ function evaluate(expect, status, owner) {
   return false;
 }
 
+// What the database holds, for the on-screen strip. `filter` marks which threads
+// the trial's captured query matches. These aggregates are separate from the
+// saver's own reads, so they never appear in the captured query or in the `find`
+// rows of `./setup.sh logs`.
+async function storeView(version, filter) {
+  const client = await getClient();
+  const checkpoints = client.db(dbNameFor(version)).collection('checkpoints');
+  const group = { $group: { _id: '$thread_id', newest: { $max: '$checkpoint_id' } } };
+  const stored = await checkpoints.aggregate([group]).toArray();
+  const matched = filter ? await checkpoints.aggregate([{ $match: filter }, group]).toArray() : [];
+  const newest = stored.reduce((latest, thread) => (thread.newest > latest ? thread.newest : latest), '');
+  return USERS.map((user) => ({
+    owner: user.owner,
+    threadId: user.threadId,
+    newest: stored.some((thread) => thread._id === user.threadId && thread.newest === newest),
+    matched: matched.some((thread) => thread._id === user.threadId),
+  }));
+}
+
 async function recordEvidence(run) {
   await mkdir(EVIDENCE_DIR, { recursive: true });
   await writeFile(EVIDENCE_FILE, JSON.stringify(run, null, 2));
@@ -122,12 +141,14 @@ export async function runTrial({ version, requestKind }) {
       marker: value.marker ?? null,
       privateNote: value.privateNote ?? null,
       reply: value.reply ?? null,
+      messages: value.messages ?? [],
     };
   } catch (error) {
     run.status = 'rejected';
     run.error = error.message;
   }
 
+  run.store = await storeView(version, run.queryTrace[0]?.filter);
   run.expectedPassed = evaluate(trial.expect, run.status, run.result?.owner);
   run.evidenceFile = await recordEvidence(run);
   return run;
@@ -155,10 +176,11 @@ export async function status() {
     return {
       ready,
       evidenceAvailable,
-      fixtureUsers: USERS.map((u) => ({ owner: u.owner, threadId: u.threadId })),
+      trials: TRIALS,
+      store: await storeView('1.3.0'),
     };
   } catch (error) {
-    return { ready: false, evidenceAvailable: false, fixtureUsers: [], error: error.message };
+    return { ready: false, evidenceAvailable: false, trials: [], store: [], error: error.message };
   }
 }
 

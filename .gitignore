@@ -3,3 +3,4 @@ evidence/
 .env
 .DS_Store
 *.log
+*.local.md

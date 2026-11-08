@@ -1,28 +1,36 @@
 'use strict';
 
 const ui = {
-  form: document.querySelector('#run-form'),
-  version: document.querySelector('#adapter-version'),
-  requestKind: document.querySelector('#request-kind'),
-  runButton: document.querySelector('#run-button'),
+  trialControls: document.querySelector('#trial-controls'),
   resetButton: document.querySelector('#reset-button'),
-  trials: [...document.querySelectorAll('.trial-button')],
   serverStatus: document.querySelector('#server-status'),
   statusMessage: document.querySelector('#status-message'),
-  context: document.querySelector('#run-context'),
+  headline: document.querySelector('#headline'),
   message: document.querySelector('#chat-message'),
+  requestPanel: document.querySelector('#request-panel'),
   request: document.querySelector('#request-json'),
+  requestType: document.querySelector('#request-type'),
+  queryPanel: document.querySelector('#query-panel'),
   query: document.querySelector('#query-json'),
-  lookupCount: document.querySelector('#lookup-count'),
-  nodeRan: document.querySelector('#node-ran'),
+  queryReached: document.querySelector('#query-reached'),
+  queryPlain: document.querySelector('#query-plain'),
   resultPanel: document.querySelector('#result-panel'),
   result: document.querySelector('#result-content'),
-  resultCheck: document.querySelector('#result-check'),
+  store: document.querySelector('#store-view'),
+  scoreboard: document.querySelector('#scoreboard-rows'),
   evidence: document.querySelector('#evidence-link'),
 };
 
+// A trial finishes in milliseconds, far too fast to follow. The finished result
+// is revealed one panel at a time so the audience's eyes go left to right.
+const REVEAL_MS = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 900;
+const pause = () => new Promise(resolve => setTimeout(resolve, REVEAL_MS));
+
 let ready = false;
 let busy = false;
+let trials = [];
+let trialButtons = [];
+let scoreCells = new Map();
 
 function setMessage(message, isError = false) {
   ui.statusMessage.textContent = message;
@@ -30,17 +38,8 @@ function setMessage(message, isError = false) {
 }
 
 function updateControls() {
-  ui.runButton.disabled = busy || !ready;
   ui.resetButton.disabled = busy || !ready;
-  ui.version.disabled = busy;
-  ui.requestKind.disabled = busy;
-  for (const button of ui.trials) {
-    button.disabled = busy || !ready;
-    const selected = button.dataset.version === ui.version.value && button.dataset.kind === ui.requestKind.value;
-    button.classList.toggle('selected', selected);
-    button.setAttribute('aria-pressed', String(selected));
-  }
-  ui.form.setAttribute('aria-busy', String(busy));
+  for (const button of trialButtons) button.disabled = busy || !ready;
 }
 
 function setEvidenceAvailable(available) {
@@ -93,28 +92,39 @@ function placeholder(element, text) {
   element.classList.add('placeholder');
 }
 
-function resetPreview(message = 'Choose a trial to begin.') {
-  ui.context.textContent = message;
-  ui.message.textContent = '“Continue my chat”';
-  placeholder(ui.request, 'Run a trial to see the submitted fields.');
-  placeholder(ui.query, 'Run a trial to inspect the lookup.');
-  ui.lookupCount.textContent = '—';
-  ui.nodeRan.textContent = '—';
+function setActivePanel(panel) {
+  for (const candidate of [ui.requestPanel, ui.queryPanel, ui.resultPanel]) candidate.classList.toggle('active', candidate === panel);
+}
+
+function setHeadline(text, tone = '') {
+  ui.headline.textContent = text;
+  ui.headline.className = `headline ${tone}`;
+}
+
+function setReached(text, className) {
+  ui.queryReached.textContent = text;
+  ui.queryReached.className = `reached ${className}`;
+  ui.queryReached.hidden = false;
+}
+
+function clearResult(text) {
   ui.resultPanel.classList.remove('cross-user');
   ui.result.replaceChildren();
-  const empty = document.createElement('div');
-  empty.className = 'empty-result';
-  const symbol = document.createElement('span');
-  symbol.className = 'empty-symbol';
-  symbol.setAttribute('aria-hidden', 'true');
-  symbol.textContent = '↩';
-  const text = document.createElement('p');
-  text.textContent = 'The real returned state will appear here.';
-  empty.append(symbol, text);
+  const empty = document.createElement('p');
+  empty.className = 'placeholder';
+  empty.textContent = text;
   ui.result.append(empty);
-  ui.resultCheck.textContent = 'No result for this selection yet.';
-  ui.resultCheck.className = 'panel-note';
-  updateControls();
+}
+
+function resetPanels() {
+  setActivePanel(null);
+  placeholder(ui.request, 'Run a trial to see them.');
+  ui.requestType.hidden = true;
+  placeholder(ui.query, 'Run a trial to see the query.');
+  ui.query.hidden = false;
+  ui.queryReached.hidden = true;
+  ui.queryPlain.hidden = true;
+  clearResult('The real returned state will appear here.');
 }
 
 function addResultText(tag, className, text) {
@@ -133,53 +143,155 @@ function addDetail(label, value, className = '') {
   term.textContent = label;
   const description = document.createElement('dd');
   description.textContent = typeof value === 'string' ? value : JSON.stringify(value);
-  if (label === 'Fixture marker') description.className = 'marker-value';
   detail.append(term, description);
   ui.result.append(detail);
 }
 
-function showRun(run) {
-  const traces = Array.isArray(run.queryTrace) ? run.queryTrace : [];
-  const kind = run.requestKind === 'operator' ? 'Operator objects' : 'Normal text IDs';
-  ui.context.textContent = `${run.version} · ${kind} · Run ${run.runId}`;
+// The captured query in plain English, read from the real command so it can
+// never disagree with the JSON above it.
+function describeQuery(trace) {
+  const threadId = trace.filter.thread_id;
+  const isOperator = typeof threadId !== 'string';
+  const match = !isOperator ? `thread_id is exactly "${threadId}"` : threadId?.$gt === '' ? 'any non-empty thread_id' : `thread_id matches ${JSON.stringify(threadId)}`;
+  const steps = [{ text: match, bad: isOperator }];
+  if (trace.sort?.checkpoint_id === -1) steps.push({ text: 'newest first' });
+  if (trace.limit === 1) steps.push({ text: 'take 1' });
+  return steps;
+}
+
+function showRequest(run) {
   ui.message.textContent = `“${run.request.message}”`;
   renderJSON(ui.request, run.request.configurable);
-  if (traces.length) renderJSON(ui.query, traces[0]);
-  else placeholder(ui.query, 'No database lookup recorded.');
-  ui.lookupCount.textContent = String(traces.length);
-  ui.nodeRan.textContent = run.graphNodeRan ? 'Yes' : 'No';
+  const isText = typeof run.request.configurable.thread_id === 'string';
+  ui.requestType.textContent = isText ? 'thread_id is text, as expected' : 'thread_id is an object, not text';
+  ui.requestType.className = `type-tag ${isText ? '' : 'bad'}`;
+  ui.requestType.hidden = false;
+}
+
+function showQuery(run) {
+  const trace = (Array.isArray(run.queryTrace) ? run.queryTrace : [])[0];
+  ui.queryPlain.replaceChildren();
+  if (!trace) {
+    setReached('Nothing reached MongoDB. No query was sent.', 'blocked');
+    ui.query.hidden = true;
+    ui.queryPlain.hidden = true;
+    return;
+  }
+  const steps = describeQuery(trace);
+  const injected = steps.some(step => step.bad);
+  setReached(injected ? 'Reached MongoDB: YES, operator included' : 'Reached MongoDB: YES', injected ? 'bad' : '');
+  ui.query.hidden = false;
+  renderJSON(ui.query, trace);
+  for (const step of steps) {
+    const item = document.createElement('li');
+    item.textContent = step.text;
+    if (step.bad) item.className = 'bad';
+    ui.queryPlain.append(item);
+  }
+  ui.queryPlain.hidden = false;
+}
+
+function showResult(run) {
   ui.result.replaceChildren();
   ui.resultPanel.classList.remove('cross-user');
 
   if (run.status === 'rejected') {
-    addResultText('span', 'result-status', 'Request rejected');
+    addResultText('span', 'result-status', 'REQUEST REJECTED');
     addResultText('h3', 'result-owner', 'No conversation restored');
     if (run.error) addResultText('p', 'rejection-error', run.error);
-    addResultText('p', 'rejection-note', traces.length === 0 ? 'The request stopped before a database lookup.' : `${traces.length} lookup queries were recorded before rejection.`);
-  } else if (run.result) {
-    const owner = String(run.result.owner || 'Unknown owner');
-    const isOtherUser = owner.toLowerCase() !== 'alice';
-    ui.resultPanel.classList.toggle('cross-user', isOtherUser);
-    addResultText('span', 'result-status', isOtherUser ? 'Different owner returned' : 'Requester’s state returned');
-    addResultText('h3', 'result-owner', `${owner}’s conversation`);
-    addDetail('Fixture marker', run.result.marker);
-    addDetail('Saved private note · fictional', run.result.privateNote);
-    addDetail('Deterministic reply · no LLM', run.result.reply, 'reply-detail');
-  } else {
-    addResultText('span', 'result-status', 'No saved state');
-    addResultText('h3', 'result-owner', 'No checkpoint returned');
-    if (run.error) addResultText('p', 'rejection-error', run.error);
+    addResultText('p', 'rejection-note', 'Error raised by the saver itself, before it built a query.');
+    return;
   }
+  const owner = String(run.result?.owner || 'Unknown owner');
+  const isOtherUser = owner !== run.simulatedRequester;
+  ui.resultPanel.classList.toggle('cross-user', isOtherUser);
+  addResultText('span', 'result-status', isOtherUser ? 'SOMEONE ELSE’S CHAT' : 'ALICE’S OWN CHAT');
+  addResultText('h3', 'result-owner', `${owner}’s conversation`);
+  const saved = run.result?.messages?.[0];
+  if (saved) addDetail(`${owner}’s saved message`, `“${saved.text}”`);
+  addDetail('Saved order details · fictional', run.result?.privateNote);
+  addDetail('Scripted reply · no LLM', run.result?.reply, 'reply-detail');
+}
 
-  if (typeof run.expectedPassed === 'boolean') {
-    ui.resultCheck.textContent = run.expectedPassed ? 'Server check: expected result confirmed.' : 'Server check: result differs from expectation.';
-    ui.resultCheck.className = `panel-note ${run.expectedPassed ? 'check-pass' : 'check-fail'}`;
-  } else {
-    ui.resultCheck.textContent = 'Actual response captured.';
-    ui.resultCheck.className = 'panel-note';
+function renderStore(store, run = null) {
+  ui.store.replaceChildren();
+  for (const thread of store) {
+    const returned = run?.status === 'ok' && run.result?.owner === thread.owner;
+    const card = document.createElement('div');
+    card.className = `store-card ${returned ? 'returned' : ''} ${returned && thread.owner !== run.simulatedRequester ? 'leaked' : ''}`;
+    const name = document.createElement('strong');
+    name.textContent = `${thread.owner}’s chat`;
+    const id = document.createElement('code');
+    id.textContent = thread.threadId;
+    const tags = document.createElement('div');
+    tags.className = 'store-tags';
+    const addTag = (text, className = '') => {
+      const tag = document.createElement('span');
+      tag.textContent = text;
+      tag.className = className;
+      tags.append(tag);
+    };
+    if (thread.newest) addTag('newest');
+    if (run && !run.queryTrace.length) addTag('not queried');
+    else if (run) addTag(thread.matched ? 'matches the query' : 'does not match', thread.matched ? 'hit' : '');
+    if (returned) addTag('returned to Alice', 'returned-tag');
+    card.append(name, id, tags);
+    ui.store.append(card);
   }
-  setEvidenceAvailable(Boolean(run.evidenceFile));
-  setMessage(run.evidenceFile ? `Evidence saved: ${String(run.evidenceFile).split(/[\\/]/).pop()}` : 'Trial complete. Results shown are from the server response.');
+}
+
+function renderTrials() {
+  ui.trialControls.replaceChildren();
+  ui.scoreboard.replaceChildren();
+  scoreCells = new Map();
+  trialButtons = trials.map(trial => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'trial-button';
+    const number = document.createElement('span');
+    number.className = 'trial-number';
+    number.textContent = trial.id;
+    const text = document.createElement('span');
+    const title = document.createElement('strong');
+    title.textContent = trial.label;
+    const detail = document.createElement('small');
+    detail.textContent = `${trial.version} ${trial.version === '1.3.0' ? 'vulnerable' : 'patched'} · ${trial.request}`;
+    text.append(title, detail);
+    button.append(number, text);
+    button.addEventListener('click', () => runTrial(trial, button));
+    ui.trialControls.append(button);
+
+    const row = document.createElement('tr');
+    const cells = [trial.id, trial.request, trial.version, '—', '—'].map(value => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+      return cell;
+    });
+    cells[3].className = 'pending';
+    cells[4].className = 'pending';
+    ui.scoreboard.append(row);
+    scoreCells.set(trial.id, { row, reached: cells[3], received: cells[4] });
+    return button;
+  });
+}
+
+function highlightTrial(trial, button) {
+  for (const other of trialButtons) {
+    other.classList.toggle('selected', other === button);
+    other.setAttribute('aria-pressed', String(other === button));
+  }
+  for (const [id, cells] of scoreCells) cells.row.classList.toggle('current', id === trial.id);
+}
+
+function updateScore(trial, run) {
+  const cells = scoreCells.get(trial.id);
+  const reached = run.queryTrace.length > 0;
+  const leaked = run.status === 'ok' && run.result?.owner !== run.simulatedRequester;
+  cells.reached.textContent = reached ? 'Yes' : 'No, stopped first';
+  cells.reached.className = reached ? '' : 'good';
+  cells.received.textContent = run.status === 'rejected' ? 'Nothing: rejected' : `${run.result?.owner}’s chat`;
+  cells.received.className = leaked ? 'bad' : 'good';
 }
 
 async function refreshStatus() {
@@ -189,8 +301,10 @@ async function refreshStatus() {
     ui.serverStatus.textContent = ready ? 'Local server ready' : 'Not ready';
     ui.serverStatus.className = `server-status ${ready ? 'ready' : 'error'}`;
     setEvidenceAvailable(Boolean(status.evidenceAvailable));
-    const owners = (status.fixtureUsers || []).map(user => user.owner).join(' / ');
-    setMessage(ready ? `Ready${owners ? ` · Fictional fixture: ${owners}` : ''}. Select a trial or continue the chat.` : 'The local database is not ready. Check the server, then reload this page.', !ready);
+    trials = status.trials || [];
+    renderTrials();
+    renderStore(status.store || []);
+    setMessage(ready ? 'Ready.' : 'The local database is not ready. Check the server, then reload this page.', !ready);
   } catch (error) {
     ready = false;
     ui.serverStatus.textContent = 'Server unavailable';
@@ -200,51 +314,58 @@ async function refreshStatus() {
   updateControls();
 }
 
-async function runTrial() {
+async function runTrial(trial, button) {
   if (busy || !ready) return;
-  const version = ui.version.value;
-  const requestKind = ui.requestKind.value;
   busy = true;
-  resetPreview(`${version} · ${requestKind === 'operator' ? 'Operator objects' : 'Normal text IDs'} · Running…`);
+  updateControls();
+  resetPanels();
+  highlightTrial(trial, button);
+  setHeadline(`Trial ${trial.id}: ${trial.label}`);
   setMessage('Running the actual LangGraph call and capturing database commands…');
-  ui.runButton.textContent = 'Loading saved state…';
   try {
-    showRun(await api('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, requestKind }) }));
+    const run = await api('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: trial.version, requestKind: trial.requestKind }) });
+    setActivePanel(ui.requestPanel);
+    showRequest(run);
+    await pause();
+    setActivePanel(ui.queryPanel);
+    showQuery(run);
+    await pause();
+    setActivePanel(null);
+    showResult(run);
+    renderStore(run.store, run);
+    updateScore(trial, run);
+    const leaked = run.status === 'ok' && run.result?.owner !== run.simulatedRequester;
+    setHeadline(trial.proves, leaked ? 'leak' : 'safe');
+    setEvidenceAvailable(Boolean(run.evidenceFile));
+    if (run.expectedPassed === false) setMessage(`Unexpected result for trial ${trial.id}. Click Reset and run it again before presenting.`, true);
+    else setMessage(`Run ${run.runId} · evidence saved`);
   } catch (error) {
-    ui.context.textContent = `${version} · Run failed`;
+    setActivePanel(null);
+    setHeadline(`Trial ${trial.id} did not complete. No conclusion can be drawn from this run.`);
     ui.result.replaceChildren();
     addResultText('h3', 'result-owner', 'Run did not complete');
     addResultText('p', 'rejection-error', error.message);
-    ui.resultCheck.textContent = 'No conclusion can be drawn from this run.';
     setMessage(error.message, true);
   } finally {
     busy = false;
-    ui.runButton.textContent = 'Continue my chat →';
     updateControls();
   }
 }
 
-ui.form.addEventListener('submit', event => { event.preventDefault(); runTrial(); });
-for (const button of ui.trials) {
-  button.addEventListener('click', () => {
-    ui.version.value = button.dataset.version;
-    ui.requestKind.value = button.dataset.kind;
-    runTrial();
-  });
-}
-for (const select of [ui.version, ui.requestKind]) select.addEventListener('change', () => resetPreview('Selection changed. Run it to capture a new result.'));
 ui.evidence.addEventListener('click', event => { if (ui.evidence.getAttribute('aria-disabled') === 'true') event.preventDefault(); });
 ui.resetButton.addEventListener('click', async () => {
   if (busy || !ready) return;
   busy = true;
   updateControls();
-  setMessage('Resetting the local fictional fixture…');
+  setMessage('Resetting the local fictional data…');
   try {
     await api('/api/reset', { method: 'POST' });
-    resetPreview('Fixture reset. Choose a trial to begin.');
+    resetPanels();
+    setHeadline('Choose a trial to begin.');
+    busy = false;
     await refreshStatus();
   } catch (error) {
-    setMessage(`Fixture reset failed. ${error.message}`, true);
+    setMessage(`Reset failed. ${error.message}`, true);
   } finally {
     busy = false;
     updateControls();

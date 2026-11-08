@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <title>NoSQL injection · Saved conversation demo</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/styles.css">
     <script src="/app.js" defer></script>
   </head>
@@ -12,79 +13,66 @@
     <div class="demo-shell">
       <header class="page-header">
         <div>
-          <p class="eyebrow">CS440 · SAVED CONVERSATION DEMO</p>
+          <p class="eyebrow">CS440 · NoSQL injection in LangGraph’s MongoDBSaver</p>
           <h1>Whose conversation gets restored?</h1>
         </div>
         <div class="identity">
           <span class="avatar" aria-hidden="true">A</span>
-          <div><span class="identity-label">Simulated requester · not authenticated</span><strong>Alice</strong></div>
+          <div><span class="identity-label">Requester (simulated)</span><strong>Alice</strong></div>
           <span id="server-status" class="server-status">Connecting…</span>
         </div>
       </header>
 
-      <form id="run-form" class="run-controls">
-        <label for="adapter-version">MongoDBSaver version
-          <select id="adapter-version" name="adapterVersion">
-            <option value="1.3.0">1.3.0 · vulnerable</option>
-            <option value="1.3.1">1.3.1 · patched</option>
-          </select>
-        </label>
-        <label for="request-kind">Request identifiers
-          <select id="request-kind" name="requestKind">
-            <option value="normal">Normal text IDs</option>
-            <option value="operator">Operator objects</option>
-          </select>
-        </label>
-        <button id="run-button" class="primary-button" type="submit" disabled>Continue my chat <span aria-hidden="true">→</span></button>
-      </form>
+      <nav id="trial-controls" class="trial-controls" aria-label="Run a trial"></nav>
 
-      <nav class="trial-controls" aria-label="Run a comparison trial">
-        <button class="trial-button" type="button" data-version="1.3.0" data-kind="normal" disabled><span class="trial-number">1</span><span><strong>Baseline</strong><small>1.3.0 · text IDs</small></span></button>
-        <button class="trial-button" type="button" data-version="1.3.0" data-kind="operator" disabled><span class="trial-number">2</span><span><strong>Changed input</strong><small>1.3.0 · objects</small></span></button>
-        <button class="trial-button" type="button" data-version="1.3.1" data-kind="operator" disabled><span class="trial-number">3</span><span><strong>After update</strong><small>1.3.1 · objects</small></span></button>
-        <button class="trial-button" type="button" data-version="1.3.1" data-kind="normal" disabled><span class="trial-number">4</span><span><strong>Normal control</strong><small>1.3.1 · text IDs</small></span></button>
-        <button id="reset-button" class="text-button" type="button" disabled>Reset fixture</button>
-      </nav>
-
-      <div class="path-bar">
-        <div class="architecture" aria-label="Request path: App, LangGraph, MongoDBSaver, MongoDB"><span>App</span><b aria-hidden="true">→</b><span>LangGraph</span><b aria-hidden="true">→</b><span>MongoDBSaver</span><b aria-hidden="true">→</b><span>MongoDB</span></div>
-        <p id="run-context">Choose a trial to begin.</p>
-      </div>
+      <p id="headline" class="headline" role="status" aria-live="polite">Choose a trial to begin.</p>
 
       <main class="evidence-grid" aria-label="Actual request and result">
-        <section class="evidence-panel request-panel">
-          <header class="panel-header"><span class="panel-number">1</span><h2>Request identifiers</h2></header>
+        <section id="request-panel" class="evidence-panel">
+          <header class="panel-header"><span class="panel-number">1</span><div><h2>What Alice sends</h2><p>App → LangGraph</p></div></header>
           <div class="panel-body">
-            <div class="message-line"><span>Chat message</span><strong id="chat-message">“Continue my chat”</strong></div>
-            <p class="code-label">configurable</p>
-            <pre id="request-json" class="json-code placeholder" aria-label="Submitted identifier fields">Run a trial to see the submitted fields.</pre>
+            <div class="message-line"><span>Chat message (never changes)</span><strong id="chat-message">“Continue my chat”</strong></div>
+            <p class="code-label">IDs the app attaches to the request</p>
+            <pre id="request-json" class="json-code placeholder" aria-label="Submitted identifier fields">Run a trial to see them.</pre>
+            <p id="request-type" class="type-tag" hidden></p>
           </div>
-          <div class="panel-note">The message stays the same. The identifier values change.</div>
         </section>
 
-        <section class="evidence-panel query-panel">
-          <header class="panel-header"><span class="panel-number">2</span><h2>Actual database lookup</h2></header>
+        <section id="query-panel" class="evidence-panel">
+          <header class="panel-header"><span class="panel-number">2</span><div><h2>What MongoDB is asked</h2><p>MongoDBSaver → MongoDB · captured live</p></div></header>
           <div class="panel-body">
-            <p class="code-label">Captured MongoDB command</p>
-            <pre id="query-json" class="json-code placeholder" aria-label="First captured database lookup">Run a trial to inspect the lookup.</pre>
+            <p id="query-reached" class="reached" hidden></p>
+            <pre id="query-json" class="json-code placeholder" aria-label="First captured database lookup">Run a trial to see the query.</pre>
+            <ol id="query-plain" class="query-plain" aria-label="The query in plain English" hidden></ol>
           </div>
-          <div class="query-statistics"><span><strong id="lookup-count">—</strong> lookup queries</span><span>Graph node ran <strong id="node-ran">—</strong></span></div>
         </section>
 
-        <section id="result-panel" class="evidence-panel result-panel">
-          <header class="panel-header"><span class="panel-number">3</span><h2>Restored conversation</h2></header>
-          <div id="result-content" class="panel-body result-content"><div class="empty-result"><span class="empty-symbol" aria-hidden="true">↩</span><p>The real returned state<br>will appear here.</p></div></div>
-          <div id="result-check" class="panel-note">No trial has run yet.</div>
+        <section id="result-panel" class="evidence-panel">
+          <header class="panel-header"><span class="panel-number">3</span><div><h2>What Alice gets back</h2><p>Restored from the saved state</p></div></header>
+          <div id="result-content" class="panel-body result-content"><p class="placeholder">The real returned state will appear here.</p></div>
         </section>
       </main>
 
-      <footer class="page-footer">
-        <div>
-          <p>Local fictional data <span aria-hidden="true">•</span> Real LangGraph + MongoDB <span aria-hidden="true">•</span> Deterministic node; no LLM call</p>
-          <p class="footnote">Alice is a simulated requester, not a logged-in session. The 1.3.1 fix rejects non-string identifier fields; that stops this operator injection but does not replace an app-level check that the requester actually owns the thread.</p>
-          <p id="status-message" class="status-message" role="status" aria-live="polite">Connecting to the local server…</p>
+      <section class="lower-grid">
+        <div class="lower-panel">
+          <h2 class="lower-title">In the database <span>two saved chats, fictional data</span></h2>
+          <div id="store-view" class="store-view"></div>
         </div>
-        <a id="evidence-link" class="evidence-link" href="/api/evidence" download="nosql-demo-evidence.json" aria-disabled="true">Download evidence <span aria-hidden="true">↓</span></a>
+        <div class="lower-panel">
+          <h2 class="lower-title">Results so far</h2>
+          <table class="scoreboard">
+            <thead><tr><th scope="col">Trial</th><th scope="col">Request</th><th scope="col">Version</th><th scope="col">Reached MongoDB?</th><th scope="col">Alice received</th></tr></thead>
+            <tbody id="scoreboard-rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer class="page-footer">
+        <p>Local fictional data <span aria-hidden="true">•</span> Real LangGraph + MongoDB <span aria-hidden="true">•</span> Scripted reply, no LLM <span aria-hidden="true">•</span> <span id="status-message" class="status-message" role="status">Connecting to the local server…</span></p>
+        <div class="footer-actions">
+          <button id="reset-button" class="text-button" type="button" disabled>Reset</button>
+          <a id="evidence-link" class="evidence-link" href="/api/evidence" download="nosql-demo-evidence.json" aria-disabled="true">Download evidence <span aria-hidden="true">↓</span></a>
+        </div>
       </footer>
     </div>
   </body>

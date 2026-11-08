@@ -9,7 +9,7 @@
     "start": "node src/server.js",
     "test": "node --test --test-concurrency=1 test/demo.test.js",
     "db:up": "docker compose up -d --wait",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down -v"
   },
   "dependencies": {
     "@langchain/core": "1.1.48",

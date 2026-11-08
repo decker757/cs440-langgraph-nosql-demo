@@ -24,7 +24,7 @@ test('Trial 1 - vulnerable + normal ids returns the requester (Alice)', async ()
   assert.equal(run.graphNodeRan, true);
   assert.equal(run.expectedPassed, true);
   assert.equal(run.queryTrace[0].collection, 'checkpoints');
-  assert.equal(run.queryTrace[0].filter.thread_id, 'alice-thread-001');
+  assert.equal(run.queryTrace[0].filter.thread_id, 'alice-thread');
 });
 
 test('Trial 2 - vulnerable + operator object leaks another user (Bob)', async () => {
@@ -37,8 +37,14 @@ test('Trial 2 - vulnerable + operator object leaks another user (Bob)', async ()
   assert.deepEqual(run.request.configurable.thread_id, { $gt: '' });
   // The captured MongoDB filter shows the operator reached the query.
   assert.deepEqual(run.queryTrace[0].filter.thread_id, { $gt: '' });
-  // The leaked content is Bob's fictional private note.
-  assert.match(run.result.privateNote, /Bob's fictional note/);
+  // The captured sort and limit explain why the newest match (Bob) comes back.
+  assert.deepEqual(run.queryTrace[0].sort, { checkpoint_id: -1 });
+  assert.equal(run.queryTrace[0].limit, 1);
+  // The operator matches both stored chats, and Bob's is the newest.
+  assert.deepEqual(run.store.map((thread) => thread.matched), [true, true]);
+  assert.deepEqual(run.store.map((thread) => thread.newest), [false, true]);
+  // The leaked content is Bob's fictional order details.
+  assert.match(run.result.privateNote, /B-2002/);
 });
 
 test('Trial 3 - patched + operator object is rejected before any lookup', async () => {
@@ -56,7 +62,16 @@ test('Trial 4 - patched + normal ids still returns the requester (Alice)', async
   assert.equal(run.status, 'ok');
   assert.equal(run.result.owner, 'Alice');
   assert.equal(run.expectedPassed, true);
-  assert.match(run.result.privateNote, /Alice's fictional note/);
+  assert.match(run.result.privateNote, /A-1001/);
+  assert.deepEqual(run.store.map((thread) => thread.matched), [true, false]);
+});
+
+test("Trial 5 - patched + Bob's real string id still returns Bob (no ownership check)", async () => {
+  const run = await runTrial({ version: '1.3.1', requestKind: 'otherUser' });
+  assert.equal(run.status, 'ok');
+  assert.equal(run.result.owner, 'Bob');
+  assert.equal(run.expectedPassed, true);
+  assert.equal(run.queryTrace[0].filter.thread_id, 'bob-thread');
 });
 
 test('Fixture is unchanged after trials (read-only): Alice still resolves to Alice', async () => {

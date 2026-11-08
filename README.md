@@ -5,7 +5,7 @@ advisory: unvalidated checkpoint identifiers in the LangGraph `MongoDBSaver`
 integration let an attacker smuggle a MongoDB query operator into an identifier
 field and read **another user's saved conversation**.
 
-- Advisory: **GHSA-98xf-r82g-9mhx**
+- Advisory: **GHSA-98xf-r82g-9mhx / CVE-2026-48121**
   (<https://github.com/langchain-ai/langgraphjs/security/advisories/GHSA-98xf-r82g-9mhx>)
 - Related issue: **#2351** (<https://github.com/langchain-ai/langgraphjs/issues/2351>)
 - Vulnerable package: `@langchain/langgraph-checkpoint-mongodb@1.3.0`
@@ -17,28 +17,35 @@ No external targets, real accounts, cloud services, or API keys.
 > **This is an integration flaw, not a flaw in MongoDB's query engine.** MongoDB
 > is one optional storage backend for LangGraph checkpoints. The bug is that the
 > saver built a query straight from caller-supplied identifier fields without
-> checking they were strings. **This is not prompt injection** — the attack
-> enters the *identifier fields*, never the chat message.
+> checking they were strings. **This is not prompt injection**: the attack enters
+> the *identifier fields*, never the chat message.
 
 ---
 
 ## What the demo shows
 
-The browser shows, side by side, for every trial:
+The screen is laid out to be read from the back of a room. For every trial it
+reveals, left to right:
 
-1. **The actual submitted identifiers** (the `configurable` object).
-2. **The actual MongoDB query**, captured live through the driver's command
-   monitoring (not a hand-written mock).
-3. **The actual returned state**, or the actual rejection error.
+1. **What Alice sends:** the actual submitted identifiers (`configurable`).
+2. **What MongoDB is asked:** the actual query, captured live through the
+   driver's command monitoring, with a plain-English reading of it. Or, if the
+   request was rejected, a clear statement that nothing reached MongoDB.
+3. **What Alice gets back:** the actual restored state, or the actual error.
 
-Four trials:
+Below those, **In the database** shows the two stored chats and which ones the
+query matched, and **Results so far** builds up a comparison of every trial.
 
-| # | Version | Identifiers | Outcome |
-|---|---------|-------------|---------|
-| 1 | 1.3.0 vulnerable | normal Alice text ids | Returns **Alice** (happy path) |
-| 2 | 1.3.0 vulnerable | operator object in `thread_id` | Returns **Bob** (unintended lookup) |
-| 3 | 1.3.1 patched | same operator object | **Rejected** before any lookup |
-| 4 | 1.3.1 patched | normal Alice text ids | Returns **Alice** (fix is not over-broad) |
+| # | Trial | Version | `thread_id` sent | Outcome |
+|---|-------|---------|------------------|---------|
+| 1 | Normal request | 1.3.0 vulnerable | `"alice-thread"` | Returns **Alice** |
+| 2 | Injection attack | 1.3.0 vulnerable | `{ "$gt": "" }` | Returns **Bob** |
+| 3 | Same attack, patched | 1.3.1 patched | `{ "$gt": "" }` | **Rejected** before any lookup |
+| 4 | Normal request, patched | 1.3.1 patched | `"alice-thread"` | Returns **Alice** (fix is not over-broad) |
+| 5 | Bob's real ID, patched | 1.3.1 patched | `"bob-thread"` | Returns **Bob** (the patch checks types, not ownership) |
+
+Trial 5 is not a LangGraph bug. It shows what a type check cannot do: the ID is
+valid text, so deciding whether Alice may read it is the application's job.
 
 ---
 
@@ -46,10 +53,10 @@ Four trials:
 
 - **Node.js >= 22** (`node --version`)
 - **Docker Desktop** running (for the local MongoDB container)
-- macOS/Linux shell. All commands below are run from this `demo/` folder.
+- A bash shell for `setup.sh`: macOS, Linux, or Windows with **Git Bash or WSL**.
+  The `npm run` commands also work from PowerShell.
 
-The npm dependencies are already installed (`node_modules/` is present). If you
-ever need to reinstall: `npm install`.
+Install dependencies once with `npm install`.
 
 The two saver versions are installed side by side as npm aliases (see
 `package.json`):
@@ -63,132 +70,45 @@ The two saver versions are installed side by side as npm aliases (see
 
 ## Exact commands
 
-### Start
-
 ```bash
-# 1. Start the local MongoDB container (binds to 127.0.0.1:27028 only)
-npm run db:up
-
-# 2. Start the demo (seeds the fictional fixture, then serves the UI)
-npm start
-```
-
-Then open: **<http://127.0.0.1:4400>**
-
-You should see "Local server ready" in the top right.
-
-### Stop
-
-```bash
-# Stop the web server: press Ctrl+C in its terminal.
-
-# Stop and remove ONLY this demo's MongoDB container + volume:
-npm run db:down
-```
-
-`npm run db:down` uses this project's Compose file (`compose.yaml`, project name
-`cs440-nosql-demo`) and touches **only** this demo's container. Your other
-Docker containers are not affected.
-
-### Run the automated tests (optional but recommended)
-
-```bash
-npm test
-```
-
-This runs the same four trials as integration tests against real LangGraph and
-real MongoDB and asserts each expected outcome, including that the fixture is
-unchanged afterward.
-
-### One-command control script (`setup.sh`)
-
-A convenience wrapper bundles the steps above. It checks prerequisites first and
-works on macOS, Linux, and Windows via **Git Bash or WSL** (native Windows
-cmd/PowerShell is not supported — it needs bash):
-
-```bash
-./setup.sh          # start: check prereqs, start MongoDB, seed the fixture, serve the UI
+./setup.sh          # start: check prereqs, start MongoDB, seed the data, serve the UI
+./setup.sh test     # run the five trials as integration tests
+./setup.sh logs     # show MongoDB's own log of each trial's query (add -f to follow)
 ./setup.sh stop     # stop and remove ONLY this demo's MongoDB container + volume
-./setup.sh test     # run the four trials as integration tests
-./setup.sh logs     # show MongoDB's own log of checkpoint queries (see below)
 ```
+
+Then open: **<http://127.0.0.1:4400>**. You should see "Local server ready" at the
+top right. Press Ctrl+C to stop the web server.
+
+Without bash, the same steps are `npm run db:up`, `npm start`, `npm test`, and
+`npm run db:down`. These use this project's Compose file (`compose.yaml`, project
+name `cs440-nosql-demo`) and touch **only** this demo's container and volume.
 
 ---
 
-## Step-by-step: the four trials in the browser
+## Running the trials
 
 Alice is the simulated requester. The chat message is always the literal text
-`Continue my chat`. Only the identifier fields change between trials.
+`Continue my chat`. Only the identifier fields change between trials. Click the
+numbered buttons in order, 1 to 5.
 
-There are two ways to run each trial:
+A trial finishes in milliseconds, so the page reveals the finished result one
+panel at a time, about a second apart. That pause is display pacing only, not
+query time.
 
-- Click a numbered **trial button** (1–4) — the fastest path, or
-- Set the two dropdowns (**MongoDBSaver version**, **Request identifiers**) and
-  click **Continue my chat**.
+**Reset** re-seeds the fictional data (Alice first, Bob last) and clears the
+results table. **Download evidence** saves the last run as JSON. Every run is also
+appended to `evidence/runs.jsonl`.
 
-### Trial 1 — Baseline (1.3.0 vulnerable, normal ids)
+### Why Bob comes back in Trial 2
 
-1. Click trial button **1 · Baseline**.
-2. **Request identifiers** panel shows: `{ "thread_id": "alice-thread-001",
-   "checkpoint_ns": "" }`.
-3. **Actual database lookup** shows a `find` on `checkpoints` with that exact
-   string filter.
-4. **Restored conversation** shows **Alice's** conversation.
-
-**Proves:** with honest string ids, the saver returns the requester's own state.
-This is the normal, correct behaviour.
-
-### Trial 2 — Changed input (1.3.0 vulnerable, operator object)
-
-1. Click trial button **2 · Changed input**.
-2. **Request identifiers** shows `thread_id` is now an **object**:
-   `{ "thread_id": { "$gt": "" }, "checkpoint_ns": "" }`. The `$gt` key is
-   highlighted as an operator.
-3. **Actual database lookup** shows the operator reached MongoDB verbatim:
-   `filter: { thread_id: { "$gt": "" }, checkpoint_ns: "" }`, `limit: 1`.
-4. **Restored conversation** shows **Bob's** conversation — a different owner —
-   and the panel highlights the cross-user result.
-
-**Proves:** `{ "$gt": "" }` means "any string thread_id". It broadens Alice's
-lookup to every stored thread. The saver's source then applies
-`.sort("checkpoint_id", -1).limit(1)`, so it returns the single **newest**
-matching checkpoint. Because Bob is seeded last, that newest checkpoint is
-Bob's. Alice receives Bob's fictional private note.
+`{ "$gt": "" }` means "any non-empty `thread_id`", which broadens Alice's lookup
+to every stored thread. The saver then applies `.sort("checkpoint_id", -1)` and
+`.limit(1)`, both visible in the captured query, so it returns the single newest
+checkpoint. Bob is seeded last, so that checkpoint is Bob's.
 
 > **Important nuance:** a broadened lookup returns the **latest matching
-> checkpoint**, not every record and not an arbitrarily chosen victim. Here it
-> is deterministically Bob because Bob was seeded last.
-
-### Trial 3 — After update (1.3.1 patched, same operator object)
-
-1. Click trial button **3 · After update**.
-2. Same operator identifiers are submitted.
-3. **Actual database lookup** shows **zero** lookup queries.
-4. **Restored conversation** shows **Request rejected** with the real error:
-   `Invalid configurable.thread_id: expected a string`.
-
-**Proves:** the 1.3.1 patch validates that identifier fields are strings and
-throws **before** building any query. The injection never reaches MongoDB.
-
-### Trial 4 — Normal control (1.3.1 patched, normal ids)
-
-1. Click trial button **4 · Normal control**.
-2. Normal Alice string ids are submitted.
-3. **Restored conversation** shows **Alice's** conversation.
-
-**Proves:** the fix is a targeted type check, not an over-correction. Legitimate
-string requests still work exactly as before. (This is the regression control.)
-
-### Reset
-
-Click **Reset fixture** at any time to re-seed the fictional Alice/Bob records
-(Alice first, Bob last) if you want to re-run from a clean state.
-
-### Download evidence
-
-After any trial, **Download evidence** saves the last run (submitted
-identifiers, captured query, and returned state/rejection) as JSON. Every run is
-also appended to `evidence/runs.jsonl` on disk.
+> checkpoint**, not every record and not an arbitrarily chosen victim.
 
 ---
 
@@ -198,159 +118,85 @@ LangGraph can **save** the state of a conversation so it can be **restored**
 later. Each saved snapshot is a *checkpoint*. To find the right checkpoint, the
 saver looks it up by a few identifier fields you pass in `config.configurable`:
 
-- **`thread_id`** — *which conversation.* Think of it as the conversation's ID,
-  like a chat's URL slug. Alice's chat and Bob's chat have different
-  `thread_id`s. Normally it is a plain string such as `"alice-thread-001"`.
-
-- **`checkpoint_ns`** — *checkpoint namespace.* A sub-label used to separate
-  checkpoints within one conversation (for example, nested sub-graphs get their
-  own namespace). For a simple top-level chat it is just the empty string `""`.
-
-- **`checkpoint_id`** (optional) — *which exact snapshot.* If you don't provide
+- **`thread_id`**: *which conversation.* Normally a plain string such as
+  `"alice-thread"`.
+- **`checkpoint_ns`**: *checkpoint namespace.* A sub-label used to separate
+  checkpoints within one conversation. For a simple top-level chat it is `""`.
+- **`checkpoint_id`** (optional): *which exact snapshot.* If you don't provide
   one, the saver returns the **latest** checkpoint for that thread.
 
-The vulnerability: version 1.3.0 dropped these values straight into a MongoDB
-filter. MongoDB treats a field whose value is an **object** like `{ "$gt": "" }`
-as an **operator**, not as a literal id. So instead of "the thread whose id is
-exactly X", the query becomes "any thread where id is greater than the empty
-string" — i.e. all of them. Version 1.3.1 rejects any identifier field that is
-not a string.
-
----
-
-## Narration script (say this while clicking)
-
-**Setup (10s):** "This is a real, published LangGraph advisory, running locally
-on fictional Alice and Bob data. Alice is a simulated requester. Watch three
-panels: the identifiers she submits, the actual MongoDB query captured live, and
-what comes back."
-
-**Trial 1 (15s):** "Baseline, vulnerable version 1.3.0, normal string ids. The
-query filters on Alice's thread id, and Alice's own conversation comes back.
-Correct behaviour."
-
-**Trial 2 (25s):** "Same vulnerable version, but now I put an object,
-dollar-g-t empty string, into the thread_id field. Look at the captured query —
-that operator reached MongoDB unchanged. It means 'any thread', so the lookup is
-broadened to the whole collection and returns the newest checkpoint, which is
-Bob's. Alice just received Bob's saved private note. That's the leak."
-
-**Trial 3 (20s):** "Now the patched version, 1.3.1, with the exact same
-malicious object. Zero queries run. The saver rejects it: 'Invalid
-configurable.thread_id: expected a string.' The injection never reaches the
-database."
-
-**Trial 4 (15s):** "Patched version with normal ids. Alice still gets Alice.
-The fix is a targeted type check, not an over-correction."
-
-**Close (15s):** "The lesson: this is an integration flaw, not a MongoDB bug,
-and not prompt injection — it enters the identifier fields. And note that
-type-checking identifiers stops this operator injection, but it does not by
-itself prove the requester owns the thread. A real app still needs its own
-ownership check."
-
----
-
-## Roughly two-minute recording walkthrough
-
-1. **0:00–0:15** — Show the browser at `http://127.0.0.1:4400`. Read the title
-   "Whose conversation gets restored?" and point out the three panels and the
-   "Simulated requester · not authenticated · Alice" label.
-2. **0:15–0:30** — Click **1 · Baseline**. Narrate Trial 1.
-3. **0:30–1:00** — Click **2 · Changed input**. Slow down. Point at the operator
-   object in panel 1, the captured operator query in panel 2, and Bob's leaked
-   note in panel 3.
-4. **1:00–1:25** — Click **3 · After update**. Point at "0 lookup queries" and
-   the rejection error.
-5. **1:25–1:45** — Click **4 · Normal control**. Alice returns; the fix is
-   clean.
-6. **1:45–2:00** — Click **Download evidence**, open the JSON, and note it
-   contains the real submitted identifiers, captured query, and result. Close
-   with the one-line lesson.
-
-A prerecorded video is acceptable: the presentation brief does not require a
-live demo or prohibit a prerecorded one, and the full presentation has a
-12-minute limit. Recording this two-minute walkthrough in advance de-risks the
-live environment.
+Version 1.3.0 dropped these values straight into a MongoDB filter. MongoDB treats
+a field whose value is an **object** like `{ "$gt": "" }` as an **operator**, not
+as a literal id. Version 1.3.1 rejects any identifier field that is not a string.
 
 ---
 
 ## How faithful is this? (what actually runs)
 
 - **Real LangGraph.** Seeding calls `graph.invoke(...)` on a compiled
-  `StateGraph`, and each trial calls `graph.invoke(...)` again — the real
-  restoration path that internally calls the saver's `getTuple`. We do **not**
-  hand-call the saver or write a raw MongoDB query and present it as automatic
-  restoration.
+  `StateGraph`, and each trial calls `graph.invoke(...)` again: the real
+  restoration path that internally calls the saver's `getTuple`.
 - **Real, unmodified saver source.** The two saver versions are the actual
-  published 1.3.0 and 1.3.1 packages, loaded via npm aliases. The vulnerable
-  read path (`getTuple`) is used exactly as shipped.
-- **Real captured query.** The MongoDB query shown in the browser is captured
-  from the Node driver's `commandStarted` monitoring event — it is the real
-  command document sent to MongoDB.
-- **Deterministic node, clearly labelled.** The single graph node returns a
-  fixed canned reply and never calls an LLM. This keeps trials reproducible.
+  published 1.3.0 and 1.3.1 packages, loaded via npm aliases.
+- **Real captured query.** The query shown is captured from the Node driver's
+  `commandStarted` monitoring event.
+- **Deterministic node, clearly labelled.** The single graph node returns a fixed
+  canned reply and never calls an LLM. This keeps trials reproducible.
 
-**One deliberate, disclosed limitation:** during a *trial* the saver is wrapped
-so that **writes** (`put` / `putWrites`) are suppressed while **reads**
-(`getTuple` / `list`) run the real, unmodified code. This keeps the seeded
-fixture identical between runs so results are repeatable. Nothing about the
-vulnerable read path is changed. Seeding uses the fully unwrapped saver, so the
-stored checkpoints are written by the genuine saver. See `src/saver.js`
-(`readOnly`) and `src/demo.js`.
+**Disclosed simplifications:**
+
+- During a *trial* the saver is wrapped so that **writes** (`put` / `putWrites`)
+  are suppressed while **reads** (`getTuple` / `list`) run the real, unmodified
+  code. This keeps the seeded data identical between runs. Seeding uses the fully
+  unwrapped saver, so the stored checkpoints are written by the genuine saver. See
+  `src/saver.js` (`readOnly`) and `src/demo.js`.
+- The trial buttons choose one of three preset identifier sets (`src/fixture.js`),
+  which go straight into the real `graph.invoke`. The demo does not expose a
+  free-form public endpoint. An app that forwards client-supplied IDs without
+  checking them is the affected scenario the advisory describes.
+- The **In the database** strip comes from separate read-only aggregates, not from
+  the saver. They are not `find` commands, so they appear in neither the captured
+  query nor the rows of `./setup.sh logs`.
 
 ---
 
 ## Database-side evidence (MongoDB's own log)
 
-The browser's query panel shows the command the *app* captured via the driver's
-monitoring event. For evidence that does **not** rely on the app's own word, this
-demo also has MongoDB log **every** operation, so you can read the exact filter
-each query carried from the **database's** side. `compose.yaml` starts mongod
-with `--slowms 0` for this.
-
-After running trials, print the checkpoint queries MongoDB actually received:
+The query panel shows the command the *app* captured. For evidence that does
+**not** rely on the app's own word, `compose.yaml` starts mongod with
+`--slowms 0`, so it logs every operation, and this prints those log entries:
 
 ```bash
-./setup.sh logs        # all captured checkpoint queries
-./setup.sh logs -f     # follow live (run in a side terminal during a demo)
+./setup.sh logs        # each trial's checkpoint query
+./setup.sh logs -f     # follow live
 ```
 
-Example output (trimmed) after Trial 2 (vulnerable) then Trial 3 (patched). In a
-terminal the injected line is highlighted red and the `returned 0` seeding rows
-are dimmed:
+Lookups from seeding return nothing and are counted but not listed.
 
 ```text
-  demo_vulnerable
-    01:22:00   thread_id="alice-thread-001"                EOF       scanned 0  -> returned 0
-    01:22:00   thread_id="bob-thread-001"                  COLLSCAN  scanned 3  -> returned 0
-    01:22:40   thread_id={"$gt":""}   <- INJECTED OPERATOR  COLLSCAN  scanned 6  -> returned 1   ** LEAK **
-
   demo_patched
-    01:22:00   thread_id="alice-thread-001"                EOF       scanned 0  -> returned 0
-    01:22:00   thread_id="bob-thread-001"                  COLLSCAN  scanned 3  -> returned 0
+    07:29:17  thread_id="alice-thread"       newest first  COLLSCAN  scanned 6  -> returned 1
+    07:29:17  thread_id="bob-thread"         newest first  COLLSCAN  scanned 6  -> returned 1
+
+  demo_vulnerable
+    07:29:17  thread_id="alice-thread"       newest first  COLLSCAN  scanned 6  -> returned 1
+    07:29:17  thread_id={"$gt":""}           newest first  COLLSCAN  scanned 6  -> returned 1   <- INJECTED OPERATOR
 ```
 
 What this proves, independently of the app:
 
-- The injected operator `{"$gt":""}` reached MongoDB **verbatim** — it is right
-  there in the database's own log, not just in a panel the app rendered.
-- `plan: COLLSCAN` with `docsExamined: 6` shows the query scanned **every**
-  stored checkpoint (Alice's and Bob's), not a scoped lookup, and `nreturned: 1`
-  is the single leaked record (Bob's, the newest match).
-- On the patched database, **no** checkpoint query carries a `$gt` filter:
-  `getTuple` rejected it before any `find` ran, so the malicious filter never
-  reached MongoDB at all.
+- The injected operator `{"$gt":""}` reached MongoDB **verbatim**, along with the
+  newest-first sort.
+- On the patched database, **no** checkpoint query carries an operator: `getTuple`
+  rejected it before any `find` ran.
 
-**Demo tip:** run `./setup.sh logs -f` in a second terminal, then click the
-trials in the browser. The injected filter appears in the live database log the
-instant you run Trial 2, and nothing appears for Trial 3.
+**What it does not prove:** `COLLSCAN` and `scanned 6` are not signs of the attack.
+The collection has no index on these fields, so normal queries scan all 6 stored
+checkpoints as well. The evidence is the filter itself.
 
 ---
 
 ## The fix, in the saver's own source
-
-You can read the difference yourself:
 
 ```bash
 diff node_modules/mongodb-saver-vulnerable/dist/checkpoint.js \
@@ -367,29 +213,27 @@ function getStringConfigValue(name, value, { required = false } = {}) {
 }
 ```
 
-and routes every identifier field (`thread_id`, `checkpoint_ns`,
-`checkpoint_id`) in `getTuple`, `list`, `put`, `putWrites`, and `deleteThread`
-through it, so a non-string value is rejected before it can become a query
-operator.
+and routes every identifier field (`thread_id`, `checkpoint_ns`, `checkpoint_id`)
+in `getTuple`, `list`, `put`, and `putWrites` through it, so a non-string value is
+rejected before it can become a query operator. `deleteThread` gets its own
+equivalent inline check.
 
 ---
 
 ## Troubleshooting
 
-- **"Server unavailable" / "Cannot connect to the local demo."** The web server
-  is not running. Run `npm start` in this folder and reload the page.
+- **"Server unavailable" / "Cannot connect to the local demo."** The web server is
+  not running. Run `./setup.sh` and reload the page.
 - **"The local database is not ready."** MongoDB is not up. Run `npm run db:up`,
   wait for it to report healthy, then `npm start`.
-- **Port 4400 already in use.** Another process holds the port. Stop it, or run
-  the server on another port: `DEMO_PORT=4500 npm start` (then open
-  `http://127.0.0.1:4500`).
-- **Port 27028 already in use, or a different MongoDB answers.** Something else
-  is bound to 27028. `npm run db:down`, ensure nothing else uses the port, then
-  `npm run db:up`. To point the demo at a different MongoDB:
-  `DEMO_MONGO_URI="mongodb://127.0.0.1:PORT" npm start`.
-- **Docker not running.** Start Docker Desktop, then `npm run db:up`.
-- **Trial 2 shows Alice, not Bob.** Click **Reset fixture** (this re-seeds Alice
-  first, Bob last) and run Trial 2 again.
+- **Docker not running.** Start Docker Desktop and try again.
+- **Port 4400 already in use.** Stop the other process, or run
+  `DEMO_PORT=4500 npm start` and open `http://127.0.0.1:4500`.
+- **Port 27028 already in use, or a different MongoDB answers.** Run
+  `npm run db:down`, make sure nothing else uses the port, then `npm run db:up`. To
+  point at another MongoDB: `DEMO_MONGO_URI="mongodb://127.0.0.1:PORT" npm start`.
+- **Trial 2 shows Alice, not Bob, or a red "Unexpected result" message.** Click
+  **Reset** and run it again.
 - **Reinstall dependencies.** `rm -rf node_modules && npm install`.
 
 ---
@@ -399,7 +243,7 @@ operator.
 - MongoDB is bound to **127.0.0.1:27028** only (see `compose.yaml`).
 - The web server binds to **127.0.0.1:4400** only (see `src/server.js`).
 - The demo uses two isolated databases, `demo_vulnerable` and `demo_patched`,
-  inside this demo's own MongoDB container/volume.
+  inside this demo's own MongoDB container and volume.
 
 ---
 
@@ -409,16 +253,19 @@ operator.
   <https://github.com/langchain-ai/langgraphjs/security/advisories/GHSA-98xf-r82g-9mhx>
 - LangGraph.js issue #2351:
   <https://github.com/langchain-ai/langgraphjs/issues/2351>
-- The installed 1.3.0 and 1.3.1 package sources under `node_modules/` (verified
-  by `diff`, shown above).
+- The installed 1.3.0 and 1.3.1 package sources under `node_modules/`.
 
 ## Limitations (summary)
 
-- Trials suppress checkpoint **writes** to stay repeatable; the vulnerable
-  **read** path is real and unmodified (disclosed above).
+- Trials suppress checkpoint **writes** to stay repeatable; the vulnerable **read**
+  path is real and unmodified.
 - The graph node is deterministic and does not use an LLM.
-- Data is entirely fictional; Alice is a simulated requester, not an
-  authenticated session.
-- Type-validating identifier fields (the 1.3.1 fix) stops this operator
-  injection, but does **not** replace an application-level ownership check that
-  the requester actually owns the requested thread.
+- Data is entirely fictional; Alice is a simulated requester, not an authenticated
+  session.
+- Type-validating identifier fields (the 1.3.1 fix) stops this operator injection,
+  but does **not** replace an application-level check that the requester owns the
+  thread. Trial 5 demonstrates this.
+- Trials submit the operator in `thread_id` only. When we also submitted
+  `checkpoint_ns: { "$ne": null }` through `graph.invoke` (LangGraph 1.4.18), the
+  captured filter still showed `checkpoint_ns: ""`, so that second operator did not
+  reach MongoDB on this path. The public reproducer calls `getTuple` directly.
